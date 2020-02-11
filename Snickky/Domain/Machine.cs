@@ -217,6 +217,10 @@ namespace Snickky.Domain
             ChangeCoins = changeCombination;
         }
 
+        /// <summary>
+        /// This algorithm behaves slightly different than the standard change permutation algorithm as it terminates after finding the first successful permutation.
+        /// Providing a reversed list of banks/denominations will yield better results.
+        /// </summary>
         private static List<int> FindChangeCombination(int remainder, int index, List<Bank> banks, List<int> combination, ref int validCombinationCount)
         {
             if (remainder == 0)
