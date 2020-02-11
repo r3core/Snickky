@@ -1,4 +1,4 @@
-# GitSearch
+# Sniccky
 
 A web application built with .NET Core 3.1 that emulates a Snickers machine.
 
@@ -17,7 +17,7 @@ These instructions will get you a copy of the project up and running on your loc
 
 ```
 projects> git clone https://github.com/r3core/Snickky.git
-projects> cd GitSearch
+projects> cd Snickky
 ```
 
 3. Execute the app with the dotnet CLI.
@@ -25,6 +25,11 @@ projects> cd GitSearch
 ```
 projects\Snickky> dotnet run --project .\Snickky\
 ```
+
+## Routes
+
+- http://{app-url}/Index - Customer Page
+- http://{app-url}/Stocks - Operator Page
 
 ## References
 
