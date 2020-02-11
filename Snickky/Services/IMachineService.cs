@@ -1,14 +1,17 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+﻿using System.Threading.Tasks;
+using Snickky.Domain.Models;
 
 namespace Snickky.Services
 {
     public interface IMachineService
     {
-        Task<bool> Insert();
-        Task<bool> Dispense();
-        Task Cancel();
+        MachineInformation GetInfo();
+        Task<MachineInformation> Insert(int coin);
+        Task<MachineInformation> Dispense();
+        Task<MachineInformation> Cancel();
+        MachineInformation Reset();
+
+        int GetStock();
+        void UpdateStock(int updatedStockValue);
     }
 }

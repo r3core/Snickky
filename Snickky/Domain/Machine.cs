@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Stateless;
 
@@ -10,7 +11,7 @@ namespace Snickky.Domain
         Reject,
         Cancel,
         Dispense,
-        Reload
+        Idle
     }
 
     public enum MachineState
@@ -24,21 +25,19 @@ namespace Snickky.Domain
     public class Machine
     {
         private const int ItemPrice = 160;
-        private StateMachine<MachineState, MachineTrigger> _stateMachine;
+        public StateMachine<MachineState, MachineTrigger> StateMachine { get; private set; }
+
         private readonly StateMachine<MachineState, MachineTrigger>.TriggerWithParameters<int> _insertionTrigger =
             new StateMachine<MachineState, MachineTrigger>.TriggerWithParameters<int>(MachineTrigger.Insert);
         private readonly StateMachine<MachineState, MachineTrigger>.TriggerWithParameters<int> _rejectionTrigger =
             new StateMachine<MachineState, MachineTrigger>.TriggerWithParameters<int>(MachineTrigger.Reject);
-        private readonly StateMachine<MachineState, MachineTrigger>.TriggerWithParameters<int> _cancellationTrigger =
-            new StateMachine<MachineState, MachineTrigger>.TriggerWithParameters<int>(MachineTrigger.Cancel);
-        private readonly StateMachine<MachineState, MachineTrigger>.TriggerWithParameters<int> _dispensationTrigger =
-            new StateMachine<MachineState, MachineTrigger>.TriggerWithParameters<int>(MachineTrigger.Dispense);
 
         private readonly Dictionary<int, Bank> _banks;
-        private int LoadedAmount;
-        public int RejectedAmount { get; private set; }
-        public int Change { get; private set; }
-        private int Snickers;
+        public int LoadedAmount { get; private set; }
+        public int ChangeAmount { get; private set; }
+        public int Snickers { get; set; }
+        public List<string> MachineLogs { get; set; }
+        public List<int> ChangeCoins { get; set; }
 
         public Machine()
         {
@@ -46,108 +45,208 @@ namespace Snickky.Domain
             ConfigureDefaults();
         }
 
-        public async Task<bool> InsertCoin()
+        public async Task InsertCoin(int coin)
         {
-            await _stateMachine.FireAsync(MachineTrigger.Insert);
-            return _stateMachine.IsInState(MachineState.Insertion);
+            await StateMachine.FireAsync(_insertionTrigger, coin);
         }
 
-        public async Task<int> Dispense()
+        public async Task Dispense()
         {
-            await _stateMachine.FireAsync(MachineTrigger.Dispense);
-            return Change;
+            await StateMachine.FireAsync(MachineTrigger.Dispense);
         }
 
-        public async Task<int> Cancel()
+        public async Task Cancel()
         {
-            await _stateMachine.FireAsync(MachineTrigger.Cancel);
-            return Change;
+            await StateMachine.FireAsync(MachineTrigger.Cancel);
+        }
+
+        public bool IsIdle()
+        {
+            return StateMachine.IsInState(MachineState.Idle);
         }
 
         private void ConfigureDefaults()
         {
+            MachineLogs = new List<string>();
+            MachineLogs.Add("The machine is idle and running.");
+            ConfigureSnickers();
             ConfigureBanks();
             ConfigureStateMachine();
         }
 
+        private void ConfigureSnickers()
+        {
+            Snickers = 2;
+        }
+
         private void ConfigureBanks()
         {
-            _banks.Add(10, new Bank(8));
-            _banks.Add(20, new Bank(25));
-            _banks.Add(50, new Bank(5));
-            _banks.Add(100, new Bank(11));
-            _banks.Add(200, new Bank(15));
+            _banks.Add(10, new Bank(8, 10));
+            _banks.Add(20, new Bank(25, 20));
+            _banks.Add(50, new Bank(5, 50));
+            _banks.Add(100, new Bank(11, 100));
+            _banks.Add(200, new Bank(15, 200));
         }
 
         private void ConfigureStateMachine()
         {
-            _stateMachine = new StateMachine<MachineState, MachineTrigger>(MachineState.Idle);
-            _stateMachine.Configure(MachineState.Idle)
+            StateMachine = new StateMachine<MachineState, MachineTrigger>(MachineState.Idle);
+            StateMachine.Configure(MachineState.Idle)
                 .PermitReentry(MachineTrigger.Dispense)
                 .PermitReentry(MachineTrigger.Cancel)
                 .Permit(MachineTrigger.Insert, MachineState.Insertion)
                 .Permit(MachineTrigger.Reject, MachineState.Suspension);
 
-            _stateMachine.Configure(MachineState.Insertion)
+            StateMachine.Configure(MachineState.Insertion)
                 .PermitReentry(MachineTrigger.Insert)
                 .Permit(MachineTrigger.Reject, MachineState.Suspension)
-                .Permit(MachineTrigger.Cancel, MachineState.Idle)
+                .Permit(MachineTrigger.Cancel, MachineState.Termination)
                 .Permit(MachineTrigger.Dispense, MachineState.Termination)
-                .OnEntryFrom(_insertionTrigger, OnInsert);
+                .OnEntryFromAsync(_insertionTrigger, OnInsert);
 
-            _stateMachine.Configure(MachineState.Suspension)
-                .PermitReentry(MachineTrigger.Insert)
-                .Permit(MachineTrigger.Cancel, MachineState.Idle)
+            StateMachine.Configure(MachineState.Suspension)
+                .Permit(MachineTrigger.Cancel, MachineState.Termination)
                 .Permit(MachineTrigger.Insert, MachineState.Insertion)
                 .OnEntryFrom(_rejectionTrigger, OnReject);
 
-            _stateMachine.Configure(MachineState.Termination)
-                .Permit(MachineTrigger.Dispense, MachineState.Idle)
-                .Permit(MachineTrigger.Cancel, MachineState.Idle)
-                .OnEntryFrom(_cancellationTrigger, OnCancel)
-                .OnEntryFrom(_dispensationTrigger, OnDispense);
+            StateMachine.Configure(MachineState.Termination)
+                .PermitReentry(MachineTrigger.Cancel)
+                .Permit(MachineTrigger.Idle, MachineState.Idle)
+                .OnEntryFromAsync(MachineTrigger.Cancel, OnCancel)
+                .OnEntryFromAsync(MachineTrigger.Dispense, OnDispense);
         }
 
-        private void OnDispense(int obj)
+        private async Task OnDispense()
         {
             var change = LoadedAmount - ItemPrice;
+            if (Snickers == 0)
+            {
+                MachineLogs.Add("Snickers are out of stock.");
+                await StateMachine.FireAsync(MachineTrigger.Cancel);
+                return;
+            }
+
             if (change == 0)
             {
                 Snickers--;
+                LoadedAmount = 0;
+                MachineLogs.Add("Snicker issued.");
+                await StateMachine.FireAsync(MachineTrigger.Idle);
             }
             else if (change < 0)
             {
-                _stateMachine.FireAsync(MachineTrigger.Cancel);
+                MachineLogs.Add("Insufficient funds.");
+                await StateMachine.FireAsync(MachineTrigger.Cancel);
             }
             else
             {
-                Snickers--;
-                Change = change;
+                
+                ChangeAmount = change;
+                LoadedAmount = 0;
+                DeductChange();
+
+                if (ChangeCoins != null)
+                {
+                    Snickers--;
+                    MachineLogs.Add("Snicker issued.");
+                    await StateMachine.FireAsync(MachineTrigger.Idle);
+                }
+                else
+                {
+                    MachineLogs.Add("Unable to return change.");
+                    await StateMachine.FireAsync(MachineTrigger.Cancel);
+                }
+                
             }
         }
 
-        private void OnCancel(int obj)
+        private async Task OnCancel()
         {
-            Change = LoadedAmount + Change;
+            MachineLogs.Add("Cancelling Transaction.");
+            ChangeAmount = LoadedAmount;
+            DeductChange();
             LoadedAmount = 0;
+            await StateMachine.FireAsync(MachineTrigger.Idle);
         }
 
         private void OnReject(int rejectedCoinValue)
         {
-            Change = rejectedCoinValue;
+            MachineLogs.Add("Rejecting coin.");
+            ChangeCoins = new List<int>{rejectedCoinValue};
         }
 
-        private void OnInsert(int coinValue)
+        private async Task OnInsert(int coinValue)
         {
-            var success = _banks[coinValue].InsertCoin();
-            if (!success)
+            var isValidCoinValue = _banks.TryGetValue(coinValue, out var bank);
+
+            if (isValidCoinValue && bank.CanInsertCoins())
             {
-                _stateMachine.FireAsync(_rejectionTrigger, coinValue);
+                MachineLogs.Add("Inserted coin.");
+                bank.Count++;
+                LoadedAmount += coinValue;
             }
             else
             {
-                LoadedAmount += coinValue;
+                if (!isValidCoinValue)
+                {
+                    MachineLogs.Add("Warning. Unsupported Coin inserted.");
+                }
+
+                if (bank != null && !bank.CanInsertCoins())
+                {
+                    MachineLogs.Add("Coin bank full.");
+                }
+                await StateMachine.FireAsync(_rejectionTrigger, coinValue);
             }
+        }
+
+        private void DeductChange()
+        {
+            var validCombinationCount = 0;
+            var banks = _banks.Values.ToList();
+            banks.Reverse();
+            var changeCombination = FindChangeCombination(ChangeAmount, 0, banks, new List<int>(), ref validCombinationCount);
+            if (changeCombination?.Any() == true)
+            {
+                foreach (var coinValue in changeCombination)
+                {
+                    _banks[coinValue].Count--;
+                }
+            }
+
+            ChangeCoins = changeCombination;
+        }
+
+        private static List<int> FindChangeCombination(int remainder, int index, List<Bank> banks, List<int> combination, ref int validCombinationCount)
+        {
+            if (remainder == 0)
+            {
+                validCombinationCount++;
+                return combination;
+            }
+
+            if (remainder < 0)
+            {
+                return null;
+            }
+
+            for(var i = index; i < banks.Count; i++)
+            {
+                var currentCoinBank = banks[i];
+                if (currentCoinBank.Count > 0)
+                {
+                    var coinValue = banks[i].CoinValue;
+                    combination.Add(coinValue);
+                    FindChangeCombination(remainder - coinValue, i, banks, combination, ref validCombinationCount);
+                    if (validCombinationCount > 0)
+                    {
+                        return combination;
+                    }
+                    combination.RemoveAt(combination.Count - 1);
+                }
+            }
+
+            return null;
         }
     }
 }
